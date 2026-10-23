@@ -111,6 +111,7 @@ describe('CollectionView', () => {
         clearQueue: vi.fn(),
         addTracksToQueue: vi.fn(),
         playQueueIndex: vi.fn(),
+        playQueueStart: vi.fn(),
         addTracksToPlaylist: vi.fn(),
         playlists: [],
         downloadTrack: vi.fn(),

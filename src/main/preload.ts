@@ -155,6 +155,8 @@ const electronAPI = {
       ipcRenderer.invoke(QUEUE_CHANNELS.REORDER, fromIndex, toIndex),
     playIndex: (index: number): Promise<void> =>
       ipcRenderer.invoke(QUEUE_CHANNELS.PLAY_INDEX, index),
+    playStart: (): Promise<void> =>
+      ipcRenderer.invoke(QUEUE_CHANNELS.PLAY_START),
     get: (): Promise<Queue> => ipcRenderer.invoke(QUEUE_CHANNELS.GET_QUEUE),
     onUpdated: createEventSubscriber<Queue>(QUEUE_CHANNELS.ON_UPDATED),
   },

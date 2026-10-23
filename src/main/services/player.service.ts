@@ -649,13 +649,12 @@ export class PlayerService extends EventEmitter {
         };
 
         if (playNext && this.currentIndex >= 0) {
-            this.queue.splice(this.currentIndex + 1, 0, queueItem);
+            const insertIndex = this.currentIndex + 1;
+            this.queue.splice(insertIndex, 0, queueItem);
+            this.extendShuffleOrder(insertIndex, true);
         } else {
             this.queue.push(queueItem);
-        }
-
-        if (this.isShuffled) {
-            this.generateShuffleOrder();
+            this.extendShuffleOrder(this.queue.length - 1, false);
         }
 
         if (emitUpdate) {
@@ -754,6 +753,15 @@ export class PlayerService extends EventEmitter {
         this.persistQueue();
     }
 
+    async playQueueStart(): Promise<void> {
+        if (this.queue.length === 0) return;
+        const index =
+            this.isShuffled && this.shuffleOrder.length > 0
+                ? this.shuffleOrder[0]
+                : 0;
+        await this.playIndex(index);
+    }
+
     async playIndex(index: number): Promise<void> {
         if (index < 0 || index >= this.queue.length) return;
 
@@ -791,10 +799,11 @@ export class PlayerService extends EventEmitter {
         }
     }
 
-    getQueue(): { items: QueueItem[]; currentIndex: number } {
+    getQueue(): { items: QueueItem[]; currentIndex: number; shuffleOrder?: number[] } {
         return {
             items: [...this.queue],
             currentIndex: this.currentIndex,
+            shuffleOrder: this.isShuffled ? [...this.shuffleOrder] : undefined,
         };
     }
 
@@ -959,6 +968,37 @@ export class PlayerService extends EventEmitter {
                 [this.shuffleOrder[0], this.shuffleOrder[currentPos]] = [this.shuffleOrder[currentPos], this.shuffleOrder[0]];
             }
         }
+    }
+
+    /**
+     * Slot a newly inserted queue index into the shuffle order without
+     * reshuffling tracks already lined up as Next.
+     *
+     * playNext places the track immediately after the current one; otherwise
+     * it is inserted at a random position in the unplayed region.
+     */
+    private extendShuffleOrder(insertedIndex: number, playNext: boolean): void {
+        if (!this.isShuffled) return;
+
+        this.shuffleOrder = this.shuffleOrder.map((i) => (i >= insertedIndex ? i + 1 : i));
+
+        if (this.currentIndex >= 0 && this.shuffleOrder.indexOf(this.currentIndex) === -1) {
+            this.shuffleOrder.unshift(this.currentIndex);
+        }
+
+        if (playNext && this.currentIndex >= 0) {
+            const currentPos = this.shuffleOrder.indexOf(this.currentIndex);
+            const insertAt = currentPos >= 0 ? currentPos + 1 : this.shuffleOrder.length;
+            this.shuffleOrder.splice(insertAt, 0, insertedIndex);
+            return;
+        }
+
+        const currentPos = this.currentIndex >= 0 ? this.shuffleOrder.indexOf(this.currentIndex) : -1;
+        const unplayedStart = currentPos >= 0 ? currentPos + 1 : 0;
+        const slot =
+            unplayedStart +
+            Math.floor(Math.random() * (this.shuffleOrder.length - unplayedStart + 1));
+        this.shuffleOrder.splice(slot, 0, insertedIndex);
     }
 
     private emitStateChange(): void {

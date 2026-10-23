@@ -222,6 +222,9 @@ export function registerIpcHandlers(ipcMain: IpcMain, services: Services) {
   ipcMain.handle(QUEUE_CHANNELS.PLAY_INDEX, (_, index: number) =>
     playerService.playIndex(index),
   );
+  ipcMain.handle(QUEUE_CHANNELS.PLAY_START, () =>
+    playerService.playQueueStart(),
+  );
   ipcMain.handle(QUEUE_CHANNELS.GET_QUEUE, () => playerService.getQueue());
 
   playerService.on("queue-updated", (queue) => {

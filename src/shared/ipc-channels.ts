@@ -72,6 +72,7 @@ export const QUEUE_CHANNELS = {
   CLEAR: "queue:clear",
   REORDER: "queue:reorder",
   PLAY_INDEX: "queue:play-index",
+  PLAY_START: "queue:play-start",
   GET_QUEUE: "queue:get",
   ON_UPDATED: "queue:on-updated",
 } as const;

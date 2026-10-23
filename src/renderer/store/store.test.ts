@@ -33,6 +33,7 @@ const mockElectron = {
     clear: vi.fn(),
     reorder: vi.fn(),
     playIndex: vi.fn(),
+    playStart: vi.fn(),
     addTracks: vi.fn(),
     onUpdated: vi.fn(),
   },
@@ -337,6 +338,10 @@ describe("useStore", () => {
     expect(mockElectron.queue.clear).toHaveBeenCalledWith(true);
     expect(mockElectron.queue.reorder).toHaveBeenCalledWith(0, 1);
     expect(mockElectron.queue.playIndex).toHaveBeenCalledWith(2);
+    await act(async () => {
+      await useStore.getState().playQueueStart();
+    });
+    expect(mockElectron.queue.playStart).toHaveBeenCalled();
     expect(mockElectron.queue.addTracks).toHaveBeenCalledWith(
       [mockTrack],
       undefined,

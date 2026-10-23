@@ -391,6 +391,63 @@ describe("PlayerService", () => {
       expect(playerService.getState().currentTrack?.id).toBe("3");
     });
 
+    it("should insert appended tracks into the unplayed shuffle region without reshuffling upcoming", () => {
+      const track1 = { ...mockTrack, id: "1" };
+      const track2 = { ...mockTrack, id: "2" };
+      const track3 = { ...mockTrack, id: "3" };
+      const track4 = { ...mockTrack, id: "4" };
+
+      playerService.addToQueue(track1);
+      playerService.addToQueue(track2);
+      playerService.addToQueue(track3);
+      playerService.playIndex(0);
+      (playerService as any).isShuffled = true;
+      (playerService as any).shuffleOrder = [0, 1, 2];
+
+      const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+      playerService.addToQueue(track4);
+      randomSpy.mockRestore();
+
+      // Inserted at the front of the unplayed region; 1 still precedes 2.
+      expect((playerService as any).shuffleOrder).toEqual([0, 3, 1, 2]);
+    });
+
+    it("should place play-next tracks immediately after the current shuffle position", () => {
+      const track1 = { ...mockTrack, id: "1" };
+      const track2 = { ...mockTrack, id: "2" };
+      const track3 = { ...mockTrack, id: "3" };
+      const track4 = { ...mockTrack, id: "4" };
+
+      playerService.addToQueue(track1);
+      playerService.addToQueue(track2);
+      playerService.addToQueue(track3);
+      playerService.playIndex(0);
+      (playerService as any).isShuffled = true;
+      (playerService as any).shuffleOrder = [0, 1, 2];
+
+      playerService.addToQueue(track4, "collection", true);
+
+      expect((playerService as any).shuffleOrder).toEqual([0, 1, 2, 3]);
+      expect(playerService.getQueue().items[1].track.id).toBe("4");
+    });
+
+    it("playQueueStart plays shuffleOrder[0] when shuffled and index 0 otherwise", async () => {
+      const track1 = { ...mockTrack, id: "1" };
+      const track2 = { ...mockTrack, id: "2" };
+
+      playerService.addToQueue(track1);
+      playerService.addToQueue(track2);
+
+      await playerService.playQueueStart();
+      expect(playerService.getState().currentTrack?.id).toBe("1");
+
+      playerService.stop();
+      (playerService as any).isShuffled = true;
+      (playerService as any).shuffleOrder = [1, 0];
+      await playerService.playQueueStart();
+      expect(playerService.getState().currentTrack?.id).toBe("2");
+    });
+
     it("should reorder invalid boundaries gracefully", () => {
       playerService.addToQueue(mockTrack);
       playerService.reorderQueue(-1, 0);

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { useStore } from "../store/store";
 import type { CollectionItem, Track } from "../../shared/types";
 import { ItemsGrid } from "./Collection/ItemsGrid";
@@ -13,6 +13,7 @@ import {
   Music,
   MoreHorizontal,
   Download,
+  RefreshCw,
 } from "lucide-react";
 import styles from "./ArtistsView.module.css";
 import { dedupeCollectionItems } from "../utils/collection-utils";
@@ -33,7 +34,7 @@ export const ArtistsView: React.FC = () => {
     getAlbumDetails,
     clearQueue,
     addTracksToQueue,
-    playQueueIndex,
+    playQueueStart,
     addTracksToPlaylist,
     downloadTrack,
     cachedTrackIds,
@@ -42,13 +43,17 @@ export const ArtistsView: React.FC = () => {
     downloadingAlbumIds,
     settings,
     goBack,
+    showToast,
   } = useStore();
 
   const isOfflineMode = settings?.offlineMode ?? false;
   const [filter, setFilter] = useState("");
   const [isActionsLoading, setIsActionsLoading] = useState(false);
+  const [actionProgress, setActionProgress] = useState({ current: 0, total: 0 });
   const [showDetailMenu, setShowDetailMenu] = useState(false);
   const [cardMenuArtistId, setCardMenuArtistId] = useState<string | null>(null);
+  const actionsInFlightRef = useRef(false);
+  const actionsCancelledRef = useRef(false);
 
   const dedupedItems = React.useMemo(
     () => (settings?.deduplicateCollection ? dedupeCollectionItems(collection?.items ?? []) : (collection?.items ?? [])),
@@ -164,39 +169,48 @@ export const ArtistsView: React.FC = () => {
       .map((letter) => ({ letter, artists: groups[letter] }));
   }, [filteredArtists]);
 
+  const resolveItemTracks = useCallback(
+    async (item: CollectionItem): Promise<Track[]> => {
+      const isPlayable = (track: Track) =>
+        track.hasStream !== false || cachedTrackIds.has(track.id);
+
+      if (item.type === "album" && item.album) {
+        if (item.album.tracks.length > 0) {
+          return item.album.tracks.filter(isPlayable);
+        }
+        if (isOfflineMode && cachedAlbumIds.has(item.album.id)) {
+          const cachedTracks = await window.electron.cache.getCachedTracksByAlbum(item.album.id);
+          if (cachedTracks.length > 0) return cachedTracks;
+        }
+        if (item.album.bandcampUrl) {
+          try {
+            const details = await getAlbumDetails(item.album.bandcampUrl, item.album.id);
+            if (details?.tracks?.length) return details.tracks.filter(isPlayable);
+          } catch (err) {
+            console.error("Failed to fetch album tracks for artist action:", item.album.title, err);
+          }
+        }
+        return [];
+      }
+
+      if (item.type === "track" && item.track) {
+        return isPlayable(item.track) ? [item.track] : [];
+      }
+
+      return [];
+    },
+    [getAlbumDetails, cachedTrackIds, cachedAlbumIds, isOfflineMode],
+  );
+
   const getArtistTracks = useCallback(
     async (items: CollectionItem[]) => {
       const allTracks: Track[] = [];
       for (const item of items) {
-        if (item.type === "album" && item.album) {
-          const isAlbumFullyCached = cachedAlbumIds.has(item.album.id);
-          if (item.album.tracks.length > 0 && item.album.tracks.every((t) => !!t.streamUrl)) {
-            allTracks.push(...item.album.tracks);
-            continue;
-          }
-          if (isOfflineMode && isAlbumFullyCached) {
-            const cachedTracks = await window.electron.cache.getCachedTracksByAlbum(item.album.id);
-            if (cachedTracks.length > 0) {
-              allTracks.push(...cachedTracks);
-              continue;
-            }
-          }
-          if (item.album.bandcampUrl) {
-            const details = await getAlbumDetails(item.album.bandcampUrl, item.album.id);
-            if (details) allTracks.push(...details.tracks);
-          }
-        } else if (item.type === "track" && item.track) {
-          if (item.track.streamUrl || cachedTrackIds.has(item.track.id)) {
-            allTracks.push(item.track);
-          } else if (item.track.bandcampUrl) {
-            const details = await getAlbumDetails(item.track.bandcampUrl, item.track.albumId);
-            if (details) allTracks.push(...details.tracks);
-          }
-        }
+        allTracks.push(...(await resolveItemTracks(item)));
       }
       return allTracks;
     },
-    [getAlbumDetails, cachedTrackIds, cachedAlbumIds, isOfflineMode],
+    [resolveItemTracks],
   );
 
   const getItemsForArtist = useCallback(
@@ -204,50 +218,99 @@ export const ArtistsView: React.FC = () => {
     [derivedArtists],
   );
 
-  const handleCardAction = useCallback(
+  const runArtistItemsAction = useCallback(
     async (
-      artistId: string,
-      action: "play" | "playNext" | "addToQueue" | "addToPlaylist" | "download",
-      playlistId?: string,
+      items: CollectionItem[],
+      action: "play" | "playNext" | "addToQueue" | "download",
     ) => {
-      setCardMenuArtistId(null);
+      if (actionsInFlightRef.current) {
+        actionsCancelledRef.current = true;
+        return;
+      }
+
+      actionsInFlightRef.current = true;
+      actionsCancelledRef.current = false;
       setIsActionsLoading(true);
+      setActionProgress({ current: 0, total: items.length });
+
+      let started = false;
+      let loaded = 0;
+      const playNextTracks: Track[] = [];
+
       try {
-        const items = getItemsForArtist(artistId);
-        const tracks = await getArtistTracks(items);
-        if (tracks.length === 0) return;
-        switch (action) {
-          case "play":
-            await clearQueue(false);
-            await addTracksToQueue(tracks);
-            await playQueueIndex(0);
-            break;
-          case "playNext":
-            await addTracksToQueue(tracks, true);
-            break;
-          case "addToQueue":
-            await addTracksToQueue(tracks);
-            break;
-          case "addToPlaylist":
-            if (playlistId) await addTracksToPlaylist(playlistId, tracks);
-            break;
-          case "download":
-            for (const track of tracks) await downloadTrack(track);
-            break;
+        if (action === "play") {
+          await clearQueue(false);
+        }
+
+        for (let i = 0; i < items.length; i++) {
+          if (actionsCancelledRef.current) break;
+          setActionProgress({ current: i + 1, total: items.length });
+
+          const tracks = await resolveItemTracks(items[i]);
+          if (actionsCancelledRef.current) break;
+          if (tracks.length === 0) continue;
+
+          if (action === "download") {
+            for (const track of tracks) {
+              if (actionsCancelledRef.current) break;
+              await downloadTrack(track);
+            }
+            loaded += tracks.length;
+            continue;
+          }
+
+          if (action === "playNext") {
+            playNextTracks.push(...tracks);
+            loaded += tracks.length;
+            continue;
+          }
+
+          await addTracksToQueue(tracks);
+          loaded += tracks.length;
+          if (action === "play" && !started) {
+            await playQueueStart();
+            started = true;
+          }
+        }
+
+        if (action === "playNext" && playNextTracks.length > 0 && !actionsCancelledRef.current) {
+          await addTracksToQueue(playNextTracks, true);
+        }
+
+        if (loaded === 0 && !actionsCancelledRef.current) {
+          const message =
+            action === "play"
+              ? "Failed to load any tracks to play"
+              : action === "download"
+                ? "Failed to load any tracks to download"
+                : "Failed to load any tracks to add to queue";
+          showToast(message, "error");
         }
       } finally {
+        actionsInFlightRef.current = false;
         setIsActionsLoading(false);
+        setActionProgress({ current: 0, total: 0 });
       }
     },
     [
-      getItemsForArtist,
-      getArtistTracks,
+      resolveItemTracks,
       clearQueue,
       addTracksToQueue,
-      playQueueIndex,
-      addTracksToPlaylist,
+      playQueueStart,
       downloadTrack,
+      showToast,
     ],
+  );
+
+  const handleCardAction = useCallback(
+    (
+      artistId: string,
+      action: "play" | "playNext" | "addToQueue" | "download",
+    ) => {
+      setCardMenuArtistId(null);
+      void runArtistItemsAction(getItemsForArtist(artistId), action);
+    },
+    [getItemsForArtist, runArtistItemsAction],
   );
 
 
@@ -328,22 +391,23 @@ export const ArtistsView: React.FC = () => {
             <div className={styles.detailActions}>
               <button
                 className={styles.playAllButton}
-                disabled={isActionsLoading}
-                onClick={async () => {
-                  setIsActionsLoading(true);
-                  try {
-                    const tracks = await getArtistTracks(artistItems);
-                    if (tracks.length > 0) {
-                      await clearQueue(false);
-                      await addTracksToQueue(tracks);
-                      await playQueueIndex(0);
-                    }
-                  } finally {
-                    setIsActionsLoading(false);
-                  }
+                title={isActionsLoading ? "Click to cancel" : "Play All"}
+                onClick={() => {
+                  void runArtistItemsAction(artistItems, "play");
                 }}
               >
-                <Play size={16} /> Play All
+                {isActionsLoading ? (
+                  <>
+                    <RefreshCw size={16} className={styles.spinning} />
+                    {actionProgress.total > 0
+                      ? `${actionProgress.current}/${actionProgress.total}`
+                      : "Loading…"}
+                  </>
+                ) : (
+                  <>
+                    <Play size={16} /> Play All
+                  </>
+                )}
               </button>
               <div
                 className={styles.moreButtonContainer}
@@ -362,29 +426,17 @@ export const ArtistsView: React.FC = () => {
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
-                      onClick={async () => {
+                      onClick={() => {
                         setShowDetailMenu(false);
-                        setIsActionsLoading(true);
-                        try {
-                          const tracks = await getArtistTracks(artistItems);
-                          if (tracks.length > 0) await addTracksToQueue(tracks, true);
-                        } finally {
-                          setIsActionsLoading(false);
-                        }
+                        void runArtistItemsAction(artistItems, "playNext");
                       }}
                     >
                       <SkipForward size={16} /> Play Next
                     </button>
                     <button
-                      onClick={async () => {
+                      onClick={() => {
                         setShowDetailMenu(false);
-                        setIsActionsLoading(true);
-                        try {
-                          const tracks = await getArtistTracks(artistItems);
-                          if (tracks.length > 0) await addTracksToQueue(tracks);
-                        } finally {
-                          setIsActionsLoading(false);
-                        }
+                        void runArtistItemsAction(artistItems, "addToQueue");
                       }}
                     >
                       <List size={16} /> Add to Queue
@@ -400,15 +452,9 @@ export const ArtistsView: React.FC = () => {
                       <>
                         <div className={styles.menuDivider} />
                         <button
-                          onClick={async () => {
+                          onClick={() => {
                             setShowDetailMenu(false);
-                            setIsActionsLoading(true);
-                            try {
-                              const tracks = await getArtistTracks(artistItems);
-                              for (const track of tracks) await downloadTrack(track);
-                            } finally {
-                              setIsActionsLoading(false);
-                            }
+                            void runArtistItemsAction(artistItems, "download");
                           }}
                         >
                           <Download size={16} /> Download for Offline

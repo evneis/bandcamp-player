@@ -65,7 +65,7 @@ export function CollectionView() {
     clearQueue,
     addAlbumToQueue,
     addTracksToQueue,
-    playQueueIndex,
+    playQueueStart,
     addTracksToPlaylist,
     downloadAlbum,
     downloadTrack,
@@ -239,7 +239,7 @@ export function CollectionView() {
                 await addAlbumToQueue(albumWithTracks, false);
                 itemsQueued++;
                 if (!hasStartedPlaying) {
-                  await playQueueIndex(0);
+                  await playQueueStart();
                   hasStartedPlaying = true;
                 }
               }
@@ -247,7 +247,7 @@ export function CollectionView() {
               await addTracksToQueue([item.track], false);
               itemsQueued++;
               if (!hasStartedPlaying) {
-                await playQueueIndex(0);
+                await playQueueStart();
                 hasStartedPlaying = true;
               }
             }
